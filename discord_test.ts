@@ -66,12 +66,10 @@ const isRecentDuplicate = (text: string) => {
   return false;
 };
 
-
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildVoiceStates,
   ],
@@ -101,7 +99,6 @@ client.on("ready", () => {
       if (channel.type === ChannelType.GuildVoice) {
         console.log(` - ${channel.name} ${channel.type} ${channel.id}`);
 
-        // join the voice channel
         const connection = joinVoiceChannel({
           channelId: channelID,
           guildId: guild.id,
@@ -126,9 +123,6 @@ client.on("ready", () => {
         connection.on(VoiceConnectionStatus.Ready, () => {
           console.log("audio connection ready");
 
-          // connection.subscribe(player);
-          // player.play(resource);
-
           const encoder = new OpusEncoder(48000, 1);
           receiver.speaking.on("start", async (userID) => {
             const queryChain = await getQueryChainForUser(userID);
@@ -151,20 +145,24 @@ client.on("ready", () => {
                     {
                       phrases: items.map((item) => item.name),
                       boost: 3.0,
-                    }
+                    },
+                    {
+                      phrases: ["Bob"],
+                      boost: 8.0,
+                    },
                   ],
                 },
-                interimResults: false, // If you want interim results, set this to true
+                interimResults: false,
               })
               .on("error", console.error)
-              .on("data", (data) => {
+              .on("data", async (data) => {
                 const result = data.results[0]?.alternatives[0]?.transcript;
                 if (!result) {
                   console.log("speech transcription timeout or empty");
                   return;
                 }
                 console.log(`Transcription: ${result}`);
-                
+
                 if (isRecentDuplicate(result)) {
                   console.log("duplicate");
                   return;
@@ -172,24 +170,24 @@ client.on("ready", () => {
 
                 addUtterance(userID, result);
 
+                // callChain(getUtterances(userID)).then(async (response) => {
+                //   if (/yes/gi.test(response.text)) {
+                //     console.log("yes");
+                // clear the utterances
+                if (/bob/gi.test(result)) {
+                  const answer = await queryQueryChain(queryChain, result);
 
+                  userUtterances.set(userID, []);
 
-                callChain(getUtterances(userID)).then(async (response) => {
-                  if (/yes/gi.test(response.text)) {
-                    console.log("yes");
-                    // clear the utterances
-                    const answer = await queryQueryChain(queryChain, result);
+                  const { player, resource } = await playText(answer.text);
 
-                    userUtterances.set(userID, []);
-
-                    const { player, resource } = await playText(answer.text);
-
-                    connection.subscribe(player);
-                    player.play(resource);
-                  } else {
-                    console.log("no");
-                  }
-                });
+                  connection.subscribe(player);
+                  player.play(resource);
+                  //   } else {
+                  //     console.log("no");
+                  //   }
+                  // });
+                }
               });
             const audio = receiver
               .subscribe(userID, {
