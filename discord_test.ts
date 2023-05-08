@@ -10,13 +10,18 @@ import { v1p1beta1 as speech } from "@google-cloud/speech";
 import { OpenAI } from "langchain/llms/openai";
 import {
   callContainsQuestion,
+  callInformModeSwitchCommand,
   createContainsQuestion,
+  createInformModeSwitchCommand,
+  createIsModeSwitchCommand,
   getQueryChainForUser,
   queryQueryChain,
 } from "./zero_shot_question";
 import { init, playText } from "./text_to_speech";
 import { characters } from "./data";
 import items from "./items";
+import { botName } from "./config";
+import { initReact, runReact } from "./react";
 
 dotenv.config();
 
@@ -36,22 +41,6 @@ const getUtterances = (userId: string) => {
   return userUtterances.get(userId) ?? [];
 };
 
-const userResponses = new Map<string, string[]>();
-const userResponseCount = 15;
-
-const addResponse = (userId: string, response: string) => {
-  const responses = userResponses.get(userId) ?? [];
-  responses.push(response);
-  if (responses.length > userResponseCount) {
-    responses.shift();
-  }
-  userResponses.set(userId, responses);
-};
-
-const getResponses = (userId: string) => {
-  return userResponses.get(userId) ?? [];
-};
-
 const { TOKEN } = process.env;
 
 const recentCalls = new Map<string, number>();
@@ -65,6 +54,13 @@ const isRecentDuplicate = (text: string) => {
   recentCalls.set(text, now);
   return false;
 };
+
+enum OperationMode {
+  Conversation = "conversation",
+  React = "react",
+}
+
+const operationModesForUser = new Map<string, OperationMode>();
 
 const client = new Client({
   intents: [
@@ -82,12 +78,21 @@ client.on("ready", () => {
 
   // initialize langchain stuff
   const model = new OpenAI({ temperature: 0.0 });
-  const chain = createContainsQuestion(model);
+  const creativeModel = new OpenAI({ temperature: 0.7 });
 
-  const callChain = async (utterances: string[]) => {
-    const response = await callContainsQuestion(chain, utterances);
-    return response;
-  };
+  initReact(model);
+
+  const chain = createContainsQuestion(model);
+  const callChain = async (utterances: string[]) =>
+    callContainsQuestion(chain, utterances);
+
+  const commandChain = createIsModeSwitchCommand(model);
+  const callCommandChain = async (utterances: string[]) =>
+    commandChain.call({ utterance: utterances.join(" ") });
+
+  const informChain = createInformModeSwitchCommand(creativeModel);
+  const callInformChain = async (mode: string, username: string) =>
+    callInformModeSwitchCommand(informChain, mode, username);
 
   // list all channels
   client.guilds.cache.forEach((guild) => {
@@ -125,13 +130,16 @@ client.on("ready", () => {
 
           const encoder = new OpusEncoder(48000, 1);
           receiver.speaking.on("start", async (userID) => {
+            const operationMode =
+              operationModesForUser.get(userID) ?? OperationMode.Conversation;
+            operationModesForUser.set(userID, operationMode);
             const queryChain = await getQueryChainForUser(userID);
 
             // Create the google speech client stream
-            const client = new speech.SpeechClient();
+            const speechClient = new speech.SpeechClient();
 
             // Create a recognize stream
-            const recognizeStream = client
+            const recognizeStream = speechClient
               .streamingRecognize({
                 config: {
                   encoding: "LINEAR16",
@@ -147,8 +155,12 @@ client.on("ready", () => {
                       boost: 3.0,
                     },
                     {
-                      phrases: ["Bob"],
+                      phrases: [botName],
                       boost: 8.0,
+                    },
+                    {
+                      phrases: ["conversation", "react", "mode"],
+                      boost: 2.0,
                     },
                   ],
                 },
@@ -174,7 +186,66 @@ client.on("ready", () => {
                 //   if (/yes/gi.test(response.text)) {
                 //     console.log("yes");
                 // clear the utterances
-                if (/bob/gi.test(result)) {
+                if (
+                  result.toLowerCase().includes(botName.toLocaleLowerCase())
+                ) {
+                  // We are a query to the bot
+                  const commandResponse = await callCommandChain(
+                    getUtterances(userID)
+                  );
+
+                  const oldMode =
+                    operationModesForUser.get(userID) ??
+                    OperationMode.Conversation;
+                  
+                  if (/(react)|(conversation)/gi.test(commandResponse.text)) {
+                    console.log("Command detected");
+
+                    const mode = commandResponse.text
+                      .toLowerCase()
+                      .includes("react")
+                      ? OperationMode.React
+                      : OperationMode.Conversation;
+
+                    if (mode === oldMode) {
+                      return;
+                    }
+
+                    operationModesForUser.set(userID, mode);
+
+                    const user = await client.users.fetch(userID);
+
+                    const informResponse = await callInformChain(
+                      mode,
+                      user.username
+                    );
+
+                    console.log(informResponse.text);
+                    const { player, resource } = await playText(
+                      informResponse.text
+                    );
+
+                    connection.subscribe(player);
+                    player.play(resource);
+
+                    return;
+                  } else {
+                    console.log("Query detected");
+                  }
+
+                  if (oldMode === OperationMode.React) {
+
+                    const answer = runReact(getUtterances(userID).join(" "));
+                    userUtterances.set(userID, []);
+
+                    // const { player, resource } = await playText(answer.text);
+
+                    // connection.subscribe(player);
+                    // player.play(resource);
+
+                    return;
+                  }
+
                   const answer = await queryQueryChain(queryChain, result);
 
                   userUtterances.set(userID, []);
@@ -183,10 +254,6 @@ client.on("ready", () => {
 
                   connection.subscribe(player);
                   player.play(resource);
-                  //   } else {
-                  //     console.log("no");
-                  //   }
-                  // });
                 }
               });
             const audio = receiver
@@ -201,6 +268,12 @@ client.on("ready", () => {
               })
               .pipe(new OpusDecodingStream({}, encoder))
               .pipe(recognizeStream);
+
+            audio.on("error", console.error);
+            audio.on("finish", () => {
+              console.log("audio stream finished");
+              recognizeStream.end();
+            });
           });
         });
         break;
