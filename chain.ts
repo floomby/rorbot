@@ -1,4 +1,4 @@
-import { ChatOpenAI } from "langchain/chat_models";
+import { ChatOpenAI } from "langchain/chat_models/openai";
 import {
   LLMChain,
   ConversationalRetrievalQAChain,
@@ -15,6 +15,9 @@ import {
 import { CallbackManager } from "langchain/callbacks";
 import { AIChatMessage, HumanChatMessage } from "langchain/schema";
 
+const formatHistory = (history: [string, string][]) =>
+  history.flatMap(([q, a]) => [new HumanChatMessage(q), new AIChatMessage(a)]);
+
 const CONDENSE_PROMPT = ChatPromptTemplate.fromPromptMessages([
   SystemMessagePromptTemplate.fromTemplate(
     `Given the following conversation between a user and an assistant, rephrase the last question from the user to be a standalone question.`
@@ -24,17 +27,14 @@ const CONDENSE_PROMPT = ChatPromptTemplate.fromPromptMessages([
 ]);
 
 const QA_PROMPT = PromptTemplate.fromTemplate(
-  `You are Oracle Bot. You answer questions about the video game Risk of Rain.
-You are given the following documents and text which may contain a question for you. Provide a conversational answer with a hyperlink to the documentation.
-You should only use hyperlinks that are explicitly listed as a source in the context. Do NOT make up a hyperlink that is not listed.
-If the question includes a request for code, provide a code block directly from the documentation.
-If you don't know the answer, just say "Hmm, I'm not sure." Don't try to make up an answer.
-If the question is not about LangChain, politely inform them that you are tuned to only answer questions about LangChain.
+  `You answer questions about the video game Risk of Rain.
+You are given the following documents and text which may contain a question for you. Provide a conversational answer.
+If you don't know the answer, just say "Hmm, I'm not sure."
 Question: {question}
 =========
 {context}
 =========
-Answer in Markdown:`
+`
 );
 
 export const makeChain = (
@@ -62,3 +62,5 @@ export const makeChain = (
     questionGeneratorChain: questionGenerator,
   });
 };
+
+export { formatHistory };

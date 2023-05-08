@@ -11,9 +11,12 @@ import { OpenAI } from "langchain/llms/openai";
 import {
   callContainsQuestion,
   createContainsQuestion,
+  getQueryChainForUser,
+  queryQueryChain,
 } from "./zero_shot_question";
 import { init, playText } from "./text_to_speech";
 import { characters } from "./data";
+import items from "./items";
 
 dotenv.config();
 
@@ -50,6 +53,19 @@ const getResponses = (userId: string) => {
 };
 
 const { TOKEN } = process.env;
+
+const recentCalls = new Map<string, number>();
+
+const isRecentDuplicate = (text: string) => {
+  const now = Date.now();
+  const lastCall = recentCalls.get(text);
+  if (lastCall && now - lastCall < 1000 * 30) {
+    return true;
+  }
+  recentCalls.set(text, now);
+  return false;
+};
+
 
 const client = new Client({
   intents: [
@@ -115,6 +131,8 @@ client.on("ready", () => {
 
           const encoder = new OpusEncoder(48000, 1);
           receiver.speaking.on("start", async (userID) => {
+            const queryChain = await getQueryChainForUser(userID);
+
             // Create the google speech client stream
             const client = new speech.SpeechClient();
 
@@ -128,8 +146,12 @@ client.on("ready", () => {
                   speechContexts: [
                     {
                       phrases: characters,
-                      boost: 3.0,
+                      boost: 5.0,
                     },
+                    {
+                      phrases: items.map((item) => item.name),
+                      boost: 3.0,
+                    }
                   ],
                 },
                 interimResults: false, // If you want interim results, set this to true
@@ -142,15 +164,25 @@ client.on("ready", () => {
                   return;
                 }
                 console.log(`Transcription: ${result}`);
+                
+                if (isRecentDuplicate(result)) {
+                  console.log("duplicate");
+                  return;
+                }
+
                 addUtterance(userID, result);
+
+
+
                 callChain(getUtterances(userID)).then(async (response) => {
                   if (/yes/gi.test(response.text)) {
                     console.log("yes");
                     // clear the utterances
+                    const answer = await queryQueryChain(queryChain, result);
+
                     userUtterances.set(userID, []);
 
-
-                    const { player, resource } = await playText(result);
+                    const { player, resource } = await playText(answer.text);
 
                     connection.subscribe(player);
                     player.play(resource);
