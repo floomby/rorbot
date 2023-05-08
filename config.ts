@@ -1,3 +1,3 @@
-const botName = "Bob";
+const botName = "Charlie";
 
 export { botName };

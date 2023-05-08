@@ -11,45 +11,43 @@ import {
   ConsoleCallbackHandler,
 } from "langchain/callbacks";
 import { AgentAction, AgentFinish, ChainValues } from "langchain/schema";
+import { RetrievalQAChain } from "langchain/chains";
+import { setVectorStore, vs } from "./zero_shot_question";
+import { HNSWLib } from "langchain/vectorstores/hnswlib";
+import { OpenAIEmbeddings } from "langchain/embeddings/openai";
 
 let executor: AgentExecutor;
+let describeItem: DynamicTool;
 
 const initReact = async (model: OpenAI) => {
-  const tools = [new Calculator()];
+  if (!vs) {
+    const vs = await HNSWLib.load("./items.hnsw", new OpenAIEmbeddings());
+    setVectorStore(vs);
+  }
+
+  const describeItemChain = RetrievalQAChain.fromLLM(model, vs.asRetriever());
+
+  describeItem = new DynamicTool({
+    name: "Describe Item",
+    description:
+      "Describes an item in Risk of Rain. Queries can be for the name, the function tags, or the description of the item.",
+    func: async (input: string) => {
+      const result = await describeItemChain.call({
+        query:
+          `Provider a description of the item best described by the following: "${input}". Make sure to mention any numbers or percentages found in the document.`,
+      });
+      console.log("describe item result", result);
+      return result.text;
+    },
+  });
+
+  const tools = [new Calculator(), describeItem];
 
   executor = await initializeAgentExecutorWithOptions(tools, model, {
     agentType: "zero-shot-react-description",
     returnIntermediateSteps: true,
   });
 };
-
-export class MyCallbackHandler extends BaseCallbackHandler {
-  name = "MyCallbackHandler";
-
-  async handleChainStart(chain: { name: string }) {
-    console.log(`Entering new ${chain.name} chain...`);
-  }
-
-  async handleChainEnd(_output: ChainValues) {
-    console.log("Finished chain.");
-  }
-
-  async handleAgentAction(action: AgentAction) {
-    console.log(action.log);
-  }
-
-  async handleToolEnd(output: string) {
-    console.log(output);
-  }
-
-  async handleText(text: string) {
-    console.log(text);
-  }
-
-  async handleAgentEnd(action: AgentFinish) {
-    console.log(action.log);
-  }
-}
 
 const runReact = async (text: string) => {
   const callbackManager = new CallbackManager();

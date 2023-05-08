@@ -131,7 +131,7 @@ client.on("ready", () => {
           const encoder = new OpusEncoder(48000, 1);
           receiver.speaking.on("start", async (userID) => {
             const operationMode =
-              operationModesForUser.get(userID) ?? OperationMode.Conversation;
+              operationModesForUser.get(userID) ?? OperationMode.React;
             operationModesForUser.set(userID, operationMode);
             const queryChain = await getQueryChainForUser(userID);
 
@@ -196,7 +196,7 @@ client.on("ready", () => {
 
                   const oldMode =
                     operationModesForUser.get(userID) ??
-                    OperationMode.Conversation;
+                    OperationMode.React;
                   
                   if (/(react)|(conversation)/gi.test(commandResponse.text)) {
                     console.log("Command detected");
@@ -206,6 +206,9 @@ client.on("ready", () => {
                       .includes("react")
                       ? OperationMode.React
                       : OperationMode.Conversation;
+
+                    // clear the utterances
+                    userUtterances.set(userID, []);
 
                     if (mode === oldMode) {
                       return;
@@ -235,13 +238,26 @@ client.on("ready", () => {
 
                   if (oldMode === OperationMode.React) {
 
-                    const answer = runReact(getUtterances(userID).join(" "));
+                    const removeBotNameRegex = new RegExp(`(hey )?${botName}`, "gi");
+
+                    // const text = getUtterances(userID).map((utterance) => {
+                    //   utterance.replace(removeBotNameRegex, "");
+                    //   return utterance;
+                    // }).join(" ");
+
+                    const utterances = getUtterances(userID);
+                    const lastUtterance = utterances[utterances.length - 1];
+                    const text = lastUtterance.replace(removeBotNameRegex, "");
+                    
+                    console.log("Got input", text);
+
+                    const answer = await runReact(text);
                     userUtterances.set(userID, []);
 
-                    // const { player, resource } = await playText(answer.text);
+                    const { player, resource } = await playText(answer.output);
 
-                    // connection.subscribe(player);
-                    // player.play(resource);
+                    connection.subscribe(player);
+                    player.play(resource);
 
                     return;
                   }

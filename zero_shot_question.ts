@@ -93,6 +93,10 @@ const callInformModeSwitchCommand = async (
 
 let vs: HNSWLib;
 
+const setVectorStore = async (vectorStore: HNSWLib) => {
+  vs = vectorStore;
+};
+
 type QueryChainState = {
   chatHistory: [string, string][];
   chain: ConversationalRetrievalQAChain;
@@ -145,4 +149,7 @@ export {
   getQueryChainForUser,
   newQueryChainForUser,
   queryQueryChain,
+  // bleh
+  setVectorStore,
+  vs,
 };
