@@ -1,0 +1,6 @@
+.env
+node_modules
+outputs
+*.js
+# Old file with the streaming intrum results attempt still there
+discord_test_old.ts
