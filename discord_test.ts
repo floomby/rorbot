@@ -1,5 +1,14 @@
+// https://discord.com/oauth2/authorize?client_id=1105129835480756386&permissions=35186522721280&scope=bot
+
 import { EndBehaviorType, VoiceConnectionStatus } from "@discordjs/voice";
-import { Client, GatewayIntentBits, ChannelType } from "discord.js";
+import {
+  Client,
+  GatewayIntentBits,
+  ChannelType,
+  REST,
+  Routes,
+  TextChannel,
+} from "discord.js";
 import dotenv from "dotenv";
 
 import { joinVoiceChannel } from "@discordjs/voice";
@@ -41,7 +50,7 @@ const getUtterances = (userId: string) => {
   return userUtterances.get(userId) ?? [];
 };
 
-const { TOKEN } = process.env;
+const { TOKEN, CLIENT_ID } = process.env;
 
 const recentCalls = new Map<string, number>();
 
@@ -71,7 +80,64 @@ const client = new Client({
   ],
 });
 
+const debugEnabledForUser = new Map<string, boolean>();
+
+// Initialize temporary file store (TODO replace this with streaming)
 init();
+
+const debugChannelForGuild = new Map<string, string>();
+
+const commands = [
+  {
+    name: "setdebugchannel",
+    description: "Set the debug channel",
+    options: [
+      {
+        name: "channel",
+        description: "The channel to set",
+        type: 7,
+        required: true,
+      },
+    ],
+  },
+];
+
+const rest = new REST({ version: "10" }).setToken(TOKEN);
+
+(async () => {
+  try {
+    console.log("Started refreshing application (/) commands.");
+
+    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+
+    console.log("Successfully reloaded application (/) commands.");
+  } catch (error) {
+    console.error(error);
+  }
+})();
+
+// setup the commands
+client.on("interactionCreate", async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
+
+  const { commandName, options } = interaction;
+
+  if (commandName === "setdebugchannel") {
+    const channel = options.getChannel("channel", true);
+    if (channel.type !== ChannelType.GuildText) {
+      await interaction.reply({
+        content: "Channel must be a text channel",
+        ephemeral: true,
+      });
+      return;
+    }
+    debugChannelForGuild.set(interaction.guildId!, channel.id);
+    await interaction.reply({
+      content: `Debug channel set to ${channel.name}`,
+      ephemeral: true,
+    });
+  }
+});
 
 client.on("ready", () => {
   console.log("Ready!");
@@ -130,6 +196,18 @@ client.on("ready", () => {
 
           const encoder = new OpusEncoder(48000, 1);
           receiver.speaking.on("start", async (userID) => {
+            const user = await client.users.fetch(userID);
+
+            const writeDebug = (message: string) => {
+              const debugChannelID = debugChannelForGuild.get(guild.id);
+              if (debugChannelID) {
+                const debugChannel = guild.channels.cache.get(
+                  debugChannelID
+                ) as TextChannel;
+                debugChannel.send(`\`${user.username}\`: ${message}`);
+              }
+            };
+
             const operationMode =
               operationModesForUser.get(userID) ?? OperationMode.React;
             operationModesForUser.set(userID, operationMode);
@@ -182,10 +260,6 @@ client.on("ready", () => {
 
                 addUtterance(userID, result);
 
-                // callChain(getUtterances(userID)).then(async (response) => {
-                //   if (/yes/gi.test(response.text)) {
-                //     console.log("yes");
-                // clear the utterances
                 if (
                   result.toLowerCase().includes(botName.toLocaleLowerCase())
                 ) {
@@ -195,9 +269,8 @@ client.on("ready", () => {
                   );
 
                   const oldMode =
-                    operationModesForUser.get(userID) ??
-                    OperationMode.React;
-                  
+                    operationModesForUser.get(userID) ?? OperationMode.React;
+
                   if (/(react)|(conversation)/gi.test(commandResponse.text)) {
                     console.log("Command detected");
 
@@ -215,8 +288,6 @@ client.on("ready", () => {
                     }
 
                     operationModesForUser.set(userID, mode);
-
-                    const user = await client.users.fetch(userID);
 
                     const informResponse = await callInformChain(
                       mode,
@@ -237,21 +308,18 @@ client.on("ready", () => {
                   }
 
                   if (oldMode === OperationMode.React) {
-
-                    const removeBotNameRegex = new RegExp(`(hey )?${botName}`, "gi");
-
-                    // const text = getUtterances(userID).map((utterance) => {
-                    //   utterance.replace(removeBotNameRegex, "");
-                    //   return utterance;
-                    // }).join(" ");
+                    const removeBotNameRegex = new RegExp(
+                      `(hey )?${botName}`,
+                      "gi"
+                    );
 
                     const utterances = getUtterances(userID);
                     const lastUtterance = utterances[utterances.length - 1];
                     const text = lastUtterance.replace(removeBotNameRegex, "");
-                    
+
                     console.log("Got input", text);
 
-                    const answer = await runReact(text);
+                    const answer = await runReact(text, writeDebug);
                     userUtterances.set(userID, []);
 
                     const { player, resource } = await playText(answer.output);
